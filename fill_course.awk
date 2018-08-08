@@ -180,7 +180,14 @@ function reformat_value(item, tag, name, value,        i, id, opts, v, vv, str) 
     }
 }
 
-function replace_type(id, tags, val, pattern,          tag, name, def, value, i, j, pat, found) {
+function is_file(name) {
+    if (index(name, "*") > 0) {
+        return 0;
+    }
+    return (length(name) < 30);
+}
+
+function replace_type(id, tags, val, pattern,          tag, name, def, value, i, j, pat, found, file) {
     tt = split(tags, TT, "|");
     tag = TT[1];
 
@@ -272,16 +279,29 @@ function replace_type(id, tags, val, pattern,          tag, name, def, value, i,
             i = match(def, " file=\"[a-z]\"");
             if (i > 0) {
                 value = value substr(def, i + 7, 1);
+                if (tag == "gfx") {
+                    gfxes = gfxes value;
+                } else if (tag == "sfx") {
+                    sfxes = sfxes value;
+                } else if (tag == "video") {
+                    videos = videos value;
+                }
                 def = substr(def, 1, i - 1) substr(def, i + RLENGTH);
             }
             i = match(def, " item-id=\"[0-9]*\"");
             if (i > 0) {
-                if (value != "") {
-                    value = value ":";
-                }
-                value = value substr(def, i + 10, RLENGTH - 11);
+                value = value ":" substr(def, i + 10, RLENGTH - 11);
                 def = substr(def, 1, i - 1) substr(def, i + RLENGTH);
+            } else {
+                file = sprintf("%05d%s.mp3", id, value);
+                if (file in MEDIA) {
+                    file = MEDIA[file];
+                    if ((file != "") && (index(file, "\n") == 0) && (is_file(file))) {
+                        value = value ":" file;
+                    }
+                }
             }
+
             # play-start="74" play-end="82,3"
             i = match(def, " play-start=\"[,.0-9]*\"");
             if (i > 0) {
@@ -409,7 +429,7 @@ function process_body(def, body,       dd, tag) {
     return body;
 }
 
-function append_media(file, val,      str, dname, i, j) {
+function parse_media(file, val,      str, dname, i, j) {
     i = find_close(val, 0);
     if (i > 0) {
         str = substr(val, 1, i-1);
@@ -441,12 +461,33 @@ function append_media(file, val,      str, dname, i, j) {
     gsub("\n", "", str);
     gsub("^  *", "", str);
     gsub("  *$", "", str);
-    if (str != "") {
-        MEDIA[file] = MEDIA[file] str "\n";
+    return str;
+}
+
+function parse_item_media(attr, file,       doc, i) {
+    if (attr == "q") {
+        return parse_media(file, question);
+    } else if (attr == "a") {
+        if (answer != "") {
+            return parse_media(file, answer);
+        } else if (q_media != "true") {
+            return parse_media(file, question);
+        }
+    } else {
+        # "audio" definition is always @sfx... Must be found in the body!
+        doc = "@sfx[q]" question "@sfx[a]" answer;
+        i = match(doc, "@sfx[^[]*\\[" attr "[^]]*\\]");
+        if (i > 0) {
+            return parse_media(file, substr(doc, i + RLENGTH));
+        } else {
+            return "";
+        }
     }
 }
 
-function read_item(id,        file, doc, tag, val, attr, look, i, question, q_audio, answer, a_audio) {
+function read_item(id,        ret, file, doc, tag, val, attr, look, skip, i) {
+    # gfxes, sfxes, videos: global variables, "passed" to replace_type()
+    # question, q_audio, answer, a_audio: globals used in parse_item_media()
     file = sprintf("item%05d.xml", id);
     if ((getline line < file) > 0) {
         close(file);
@@ -473,6 +514,10 @@ function read_item(id,        file, doc, tag, val, attr, look, i, question, q_au
     gsub(" *<item [^>]*>", "", doc);
     gsub(" *</item>", "", doc);
 
+
+    gfxes = "";
+    sfxes = "";
+    videos = "";
     question = "";
     q_audio = "";
     answer = "";
@@ -498,10 +543,11 @@ function read_item(id,        file, doc, tag, val, attr, look, i, question, q_au
             ret = ret tag ": " attr "\n";
         }
         doc = substr(doc, i + 1);
+        skip = 0;
 
         if (look) {
             if (attr != "") {
-                print id ": attributes and value in " tag >"/dev/stderr";
+                print id ": attributes (" attr ") and value (" val ") in \"" tag "\"" >"/dev/stderr";
                 exit(1);
             }
             i = index(doc, "</" tag ">");
@@ -516,8 +562,10 @@ function read_item(id,        file, doc, tag, val, attr, look, i, question, q_au
 
             if (tag == "question-audio") {
                 q_audio = val;
+                skip = 1;
             } else if (tag == "answer-audio") {
                 a_audio = val;
+                skip = 1;
             }
 
             val = gensub(" *< *br */ *>", "\\\\n", "G", val);
@@ -653,7 +701,9 @@ function read_item(id,        file, doc, tag, val, attr, look, i, question, q_au
 
             gsub("\n\n*", "\n", val);
             gsub("\n", "\n    ", val);
-            if (index(val, "\n") > 0) {
+            if (skip) {
+                # don't append skipped
+            } else if (index(val, "\n") > 0) {
                 ret = ret tag ":\n    " val "\n";
             } else {
                 ret = ret tag ": " val "\n";
@@ -662,65 +712,182 @@ function read_item(id,        file, doc, tag, val, attr, look, i, question, q_au
         }
     }
 
-    val = sprintf("%05d", id);
-    for (file in MEDIA) {
-        if (substr(file, 1, 5) == val) {
-            if (substr(file, 6) == "q.mp3") {
-                append_media(file, question);
-            } else if (substr(file, 6) == "a.mp3") {
-                if (answer != "") {
-                    append_media(file, answer);
-                } else if (q_media != "true") {
-                    append_media(file, question);
+    # append media for current item: all found in the body and computed from q/a
+    if (item_type == "pres") {
+        a_audio = "false";
+    }
+    if (item_disabled == "true") {
+        a_audio = "false";
+        q_audio = "false";
+    }
+    if (a_audio != "false") {
+        sfxes = "a" sfxes;
+    }
+    if (q_audio != "false") {
+        sfxes = "q" sfxes;
+    }
+    for (i = 1; i <= length(sfxes); i++) {
+        attr = substr(sfxes, i, 1);
+        file = sprintf("%05d%s.mp3", id, attr);
+        if ((!(file in MEDIA)) || (MEDIA[file] == "*")) {
+            val = parse_item_media(attr, file);
+            if (val != "") {
+                # name and keyword are taken from global scope
+                if (item_name != "") {
+                    val = val "\n" item_name;
                 }
-            } else if (substr(file, 7) == ".mp3") {
-                doc = "@sfx[q]" question "@sfx[a]" answer;
-                i = match(doc, "@sfx[^[]*\\[" substr(file, 6, 1) "[^]]*\\]");
-                if (i > 0) {
-                    append_media(file, substr(doc, i + RLENGTH));
-                } else {
-                    print "Reference to " file " not found in " id >"/dev/stderr";
+                if (item_keyword != "") {
+                    val = val "\n" item_keyword;
+                }
+            }
+            MEDIA[file] = val;
+        }
+    }
+
+    for (i = 1; i <= length(sfxes); i++) {
+        attr = substr(sfxes, i, 1);
+        file = sprintf("%05d%s.mp3", id, attr);
+        if (file in MEDIA) {
+            val = MEDIA[file];
+            if ((index(val, "\n") == 0) && ((attr == "q") || (attr == "a") || (!is_file(val)))) {
+                # don't include texts identical as in the body.
+                if (val != parse_item_media(attr, file)) {
+                    if (val == "") {
+                        ret = ret attr "-media: -" "\n";
+                    } else {
+                        ret = ret attr "-media: " val "\n";
+                    }
                 }
             }
         }
     }
-
     return ret;
 }
 
-function print_file() {
-    if (file != "") {
-        if (keyword != "") {
-            KEYWORDS[id] = keyword;
+function read_media(file) {
+    while ((getline files < file) > 0) {
+        gsub(" *#.*$", "", files);
+        if (files == "") {
+            continue;
         }
-        keyword = "";
-        if (name != "") {
-            NAMES[id] = name;
+        MD5[files] = files;
+        media = "";
+        while ((getline strings < file) > 0) {
+            if (strings == "") {
+                break;
+            }
+            if (media != "") {
+                media = media "\n" strings;
+            } else {
+                media = strings;
+            }
         }
-        name = "";
-        id = "";
-        print file;
+        # spread over all files from the group
+        ff = split(files, FILES, "  *");
+        for (f = 1; f <= ff; f++) {
+            if (FILES[f] in MEDIA) {
+                print "Duplicated media file " FILES[f] >"/dev/stderr";
+                exit(1);
+            }
+            MEDIA[FILES[f]] = media;
+        }
+        delete FILES;
+    }
+    close(file);
+
+    # does it succeed with reading files from media.txt?
+    for (files in MEDIA) {
         file = "";
+        break;
+    }
+    # if nothing was read, the file must be created on files in media/
+    if (file != "") {
+        cmd = "cd media && md5sum ??????.*";
+        i = 0; j = 0;
+        while ((cmd | getline) > 0) {
+            MEDIA[substr($0, 35)] = "*";
+            j++;
+            if ($1 in MD5) {
+                MD5[$1] = MD5[$1] " " substr($0, 35);
+            } else {
+                MD5[$1] = substr($0, 35);
+                i++;
+            }
+        }
+        close(cmd);
+        print "Found " i " potentially uniq files, " j " in general" >"/dev/stderr";
+    }
+}
+
+function save_media(file) {
+    printf "" >file;
+    # files are reported in the alphabetical order
+    n = asort(MD5);
+    ALL[""] = "";
+    ALL["*"] = "";
+
+    for (i=1; i<=n; i++) {
+        print MD5[i] >>file;
+
+        FOUND[""] = "";
+
+        # ignore duplicates, first lines must be kept together!
+        mm = split(MD5[i], MM, "  *");
+        for (j = 1; j <= mm; j++) {
+            if (MM[j] in MEDIA) {
+                split(MEDIA[MM[j]], SS, "\n");
+                if (!(SS[1] in FOUND)) {
+                    if (SS[1] in ALL) {
+                        print "Duplicated \"" SS[1] "\", " ALL[SS[1]] "/" MM[j] >"/dev/stderr";
+                    } else {
+                        ALL[SS[1]] = MM[j];
+                    }
+                    FOUND[SS[1]] = "";
+                    print SS[1] >>file;
+                }
+                delete SS;
+            }
+        }
+        for (j = 1; j <= mm; j++) {
+            if (MM[j] in MEDIA) {
+                ss = split(MEDIA[MM[j]], SS, "\n");
+                for (k = 2; k <= ss; k++) {
+                    if (SS[k] in ALL) {
+                        print "Duplicated \"" SS[k] "\", " ALL[SS[1]] "/" MM[j] >"/dev/stderr";
+                    } else {
+                        ALL[SS[k]] = MM[j];
+                    }
+                    if (!(SS[k] in FOUND)) {
+                        FOUND[SS[k]] = "";
+                        print SS[k] >>file;
+                    }
+                }
+                delete SS;
+            }
+        }
+        delete MM;
+
+        delete FOUND;
+        print "" >>file;
+    }
+    close(file);
+}
+
+function print_file() {
+    if (item_id != "") {
+        print read_item(item_id);
+        item_disabled = "";
+        item_keyword = "";
+        item_name = "";
+        item_type = "";
+        item_id = "";
     }
 }
 
 BEGIN{
     MD5["-"] = "";
-    cmd = "cd media && md5sum ??????.*";
-    i = 0; j = 0;
-    while ((cmd | getline) > 0) {
-        MEDIA[substr($0, 35)] = "";
-        j++;
-        if ($1 in MD5) {
-            MD5[$1] = MD5[$1] " " substr($0, 35);
-        } else {
-            MD5[$1] = substr($0, 35);
-            i++;
-        }
-    }
-    close(cmd);
+    read_media("media.txt");
     delete MD5["-"];
-    print "Found " i " potentially uniq files, " j " in general" >"/dev/stderr";
 
     FS=": *";
 }
@@ -728,16 +895,17 @@ BEGIN{
 {
     if ($0 == "") {
         print_file();
-    }
-    if ($1 == "keywords") {
-        keyword = $2;
-    }
-    if ($1 == "name") {
-        name = $2;
     } else if ($1=="id") {
-        id = $2;
+        item_id = $2;
         printf $2 "     \r" >"/dev/stderr";
-        file=read_item($2);
+    } else if ($1 == "keywords") {
+        item_keyword = $2;
+    } else if ($1 == "name") {
+        item_name = $2;
+    } else if ($1 == "type") {
+        item_type = $2;
+    } else if ($1 == "disabled") {
+        item_disabled = $2;
     }
     print $0;
 }
@@ -754,58 +922,8 @@ END {
         }
     }
 
-    # save media to media.txt file
-    file = "media.txt";
-    print "# defined media files" >file;
-    # files are reported in the alphabetical order
-    n = asort(MD5);
-    for (i=1; i<=n; i++) {
-        print MD5[i] >>file;
-
-        # join media for all "same" files
-        media = "";
-        mm = split(MD5[i], MM, "  *");
-        for (j = 1; j <= mm; j++) {
-            id = MM[j];
-            gsub("^0*", "", id);
-            gsub("[a-z]\\..*$", "", id);
-            if (id in KEYWORDS) {
-                media = media KEYWORDS[id] "\n";
-            }
-            if (id in NAMES) {
-                media = media NAMES[id] "\n";
-            }
-            if (MM[j] in MEDIA) {
-                media = media MEDIA[MM[j]];
-            }
-        }
-        delete MM;
-
-        mm = split(media, MM, "\n");
-        while (mm > 0) {
-            name = "";
-            for (j in MM) {
-                if (name == "") {
-                    name = MM[j];
-                }
-                if ((name == MM[j]) || (MM[j] == "")) {
-                    REMOVE[j] = "";
-                }
-            }
-            for (j in REMOVE) {
-                delete MM[j];
-                mm--;
-            }
-            delete REMOVE;
-
-            if (name != "") {
-                print name >>file;
-            }
-        }
-        delete MM;
-
-        print "" >>file;
+    # save all (found) media definitions
+    if (!("-" in MD5)) {
+        save_media("media.txt");
     }
-    close(file);
 }
-
