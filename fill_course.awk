@@ -184,7 +184,8 @@ function is_file(name) {
     if (index(name, "*") > 0) {
         return 0;
     }
-    return (length(name) < 30);
+    # filenames are "marked" with "@" at the beginning of the string..
+    return (index(name, "@") == 1);
 }
 
 function replace_type(id, tags, val, pattern,          tag, name, def, value, i, j, pat, found, file) {
@@ -248,24 +249,24 @@ function replace_type(id, tags, val, pattern,          tag, name, def, value, i,
             }
 
             # build appropriate definition and value: keep requested tags in def, remove all from value
-            # just by replacing them to ˻ and then replace one-by one.
+            # just by replacing them to \253\273 and then replace one-by one.
             # DO NOT REPLACE these characters with real UTF-8 representations: these are 2 bytes then!
             for (i = 1; i <= tt; i++) {
                 while ((j = match(def, "< */* *" TT[i] "[^>]*>")) > 0) {
-                    def = substr(def, 1, j - 1) "ˢ substr(def, j + 1, RLENGTH - 2) "ۢ substr(def, j + RLENGTH);
+                    def = substr(def, 1, j - 1) "\253" substr(def, j + 1, RLENGTH - 2) "\273" substr(def, j + RLENGTH);
                 }
             }
-            gsub("ܛ \n]*", "ۢ, def);
-            gsub("[ \n]*ˢ, "ˢ, def);
+            gsub("\273[ \n]*", "\273", def);
+            gsub("[ \n]*\253", "\253", def);
             value = def;
-            name = substr(def, match(def, "ܛ^̝+ˢ), RLENGTH);
-            gsub("ܛ^̝+ˢ, "ܛ]ˢ, def);
-            gsub("ۢ, ">", def);
-            gsub("ˢ, "<", def);
+            name = substr(def, match(def, "\273[^\253]+\253"), RLENGTH);
+            gsub("\273[^\253]+\253", "\273[]\253", def);
+            gsub("\273", ">", def);
+            gsub("\253", "<", def);
 
-            gsub("^(̛^ܝ*۩*", "", value);
-            gsub("(̛^ܝ*۩*$", "", value);
-            gsub("(̛^ܝ*۩+", "|", value);
+            gsub("^(\253[^\273]*\273)*", "", value);
+            gsub("(\253[^\273]*\273)*$", "", value);
+            gsub("(\253[^\273]*\273)+", "|", value);
         }
 
         if (tag == "a") {
@@ -297,7 +298,7 @@ function replace_type(id, tags, val, pattern,          tag, name, def, value, i,
                 if (file in MEDIA) {
                     file = MEDIA[file];
                     if ((file != "") && (index(file, "\n") == 0) && (is_file(file))) {
-                        value = value ":" file;
+                        value = value ":" substr(file, 2);
                     }
                 }
             }
