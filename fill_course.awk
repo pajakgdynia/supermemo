@@ -188,7 +188,7 @@ function is_file(name) {
     return (index(name, "@") == 1);
 }
 
-function replace_type(id, tags, val, pattern,          tag, name, def, value, i, j, pat, found, file) {
+function replace_type(id, tags, val, pattern,          tag, name, def, value, i, j, pat, found, file, ext) {
     tt = split(tags, TT, "|");
     tag = TT[1];
 
@@ -282,10 +282,13 @@ function replace_type(id, tags, val, pattern,          tag, name, def, value, i,
                 value = value substr(def, i + 7, 1);
                 if (tag == "gfx") {
                     gfxes = gfxes value;
+                    ext="png";
                 } else if (tag == "sfx") {
                     sfxes = sfxes value;
+                    ext="mp3";
                 } else if (tag == "video") {
                     videos = videos value;
+                    ext="mp4";
                 }
                 def = substr(def, 1, i - 1) substr(def, i + RLENGTH);
             }
@@ -294,7 +297,7 @@ function replace_type(id, tags, val, pattern,          tag, name, def, value, i,
                 value = value ":" substr(def, i + 10, RLENGTH - 11);
                 def = substr(def, 1, i - 1) substr(def, i + RLENGTH);
             } else {
-                file = sprintf("%05d%s.mp3", id, value);
+                file = sprintf("%05d%s.%s", id, value, ext);
                 if (file in MEDIA) {
                     file = MEDIA[file];
                     if ((file != "") && (index(file, "\n") == 0) && (is_file(file))) {
@@ -410,8 +413,8 @@ function process_body(def, body,       dd, tag) {
     if (tag == "sfx") {
         # stop collecting the audio..
         return "|";
-    } else if (tag == "gfx") {
-        # ignore gfx files
+    } else if ((tag == "gfx") || (tag == "video")) {
+        # ignore media files
         return "";
     } else if (def == "part.em") {
         return "";
@@ -486,9 +489,52 @@ function parse_item_media(attr, file,       doc, i) {
     }
 }
 
+function update_item_media(id, letters, ext,     i, file, val,orig) {
+    for (i = 1; i <= length(letters); i++) {
+        file = sprintf("%05d%s.%s", id, substr(letters, i, 1), ext);
+        if (file in MEDIA) {
+            orig = MEDIA[file];
+        } else {
+            orig = "*";
+        }
+        if (substr(orig, 1, 1) == "*") {
+            if (answer != "") {
+                val = parse_media(file, answer);
+            } else if (q_media != "true") {
+                val = parse_media(file, question);
+            } else {
+                val = "";
+            }
+            if (val != "") {
+                val = val "\n";
+            }
+
+            if (item_keyword != "") {
+                val = val item_keyword  "\n";
+            }
+            if (item_name != "") {
+                val = val item_name "\n";
+            }
+            if (chapter != "") {
+                val = val chapter "\n";
+            }
+            if (orig != "*") {
+                val = val orig "\n";
+            }
+            if (val == "") {
+                val = "--Unknown--";
+            } else {
+                val = substr(val, 1, length(val) - 1);
+            }
+            MEDIA[file] = val;
+        }
+    }
+}
+
 function read_item(id,        ret, file, doc, tag, val, attr, look, skip, i) {
     # gfxes, sfxes, videos: global variables, "passed" to replace_type()
     # question, q_audio, answer, a_audio: globals used in parse_item_media()
+    # chapter passed to update_media()
     file = sprintf("item%05d.xml", id);
     if ((getline line < file) > 0) {
         close(file);
@@ -523,6 +569,7 @@ function read_item(id,        ret, file, doc, tag, val, attr, look, skip, i) {
     q_audio = "";
     answer = "";
     a_audio = "";
+    chapter = "";
     ret = "";
     while ((i = index(doc, "<")) > 0) {
         doc = substr(doc, i + 1);
@@ -698,6 +745,8 @@ function read_item(id,        ret, file, doc, tag, val, attr, look, skip, i) {
                 question = val;
             } else if (tag == "answer") {
                 answer = val;
+            } else if (tag == "chapter-title") {
+                chapter = val;
             }
 
             gsub("\n\n*", "\n", val);
@@ -730,38 +779,44 @@ function read_item(id,        ret, file, doc, tag, val, attr, look, skip, i) {
     for (i = 1; i <= length(sfxes); i++) {
         attr = substr(sfxes, i, 1);
         file = sprintf("%05d%s.mp3", id, attr);
-        if ((!(file in MEDIA)) || (MEDIA[file] == "*")) {
+        if (file in MEDIA) {
+            val = MEDIA[file];
+        } else {
+            val = "*";
+        }
+        if (substr(val, 1, 1) == "*") {
+            ext = val;
             val = parse_item_media(attr, file);
-            if (val != "") {
-                # name and keyword are taken from global scope
-                if (item_name != "") {
-                    val = val "\n" item_name;
-                }
-                if (item_keyword != "") {
-                    val = val "\n" item_keyword;
-                }
+            if (val == "") {
+                val = "--Silence--";
+            }
+            # name and keyword are taken from global scope
+            if (item_name != "") {
+                val = val "\n" item_name;
+            }
+            if (item_keyword != "") {
+                val = val "\n" item_keyword;
+            }
+            if (ext != "*") {
+                val = val "\n" ext;
             }
             MEDIA[file] = val;
         }
-    }
 
-    for (i = 1; i <= length(sfxes); i++) {
-        attr = substr(sfxes, i, 1);
-        file = sprintf("%05d%s.mp3", id, attr);
-        if (file in MEDIA) {
-            val = MEDIA[file];
-            if ((index(val, "\n") == 0) && ((attr == "q") || (attr == "a") || (!is_file(val)))) {
-                # don't include texts identical as in the body.
-                if (val != parse_item_media(attr, file)) {
-                    if (val == "") {
-                        ret = ret attr "-media: -" "\n";
-                    } else {
-                        ret = ret attr "-media: " val "\n";
-                    }
+        if ((index(val, "\n") == 0) && ((attr == "q") || (attr == "a") || (!is_file(val)))) {
+            # don't include texts identical as in the body.
+            if (val != parse_item_media(attr, file)) {
+                if (val == "") {
+                    ret = ret attr "-audio: -" "\n";
+                } else {
+                    ret = ret attr "-audio: " val "\n";
                 }
             }
         }
     }
+
+    update_item_media(id, gfxes, "png");
+    update_item_media(id, videos, "mp4");
     return ret;
 }
 
@@ -806,13 +861,33 @@ function read_media(file) {
         cmd = "cd media && md5sum ??????.*";
         i = 0; j = 0;
         while ((cmd | getline) > 0) {
-            MEDIA[substr($0, 35)] = "*";
-            j++;
-            if ($1 in MD5) {
-                MD5[$1] = MD5[$1] " " substr($0, 35);
+            file = substr($0, 35);
+            if (gsub("\\.media$", ".mp3", file) != 0) {
+                ext = "media";
+            } else if (gsub("\\.gif$", ".png", file) != 0) {
+                ext = "gif";
+            } else if (gsub("\\.jpg$", ".png", file) != 0) {
+                ext = "jpg";
+            } else if (gsub("\\.avi$", ".mp4", file) != 0) {
+                ext = "avi";
             } else {
-                MD5[$1] = substr($0, 35);
-                i++;
+                ext = "";
+            }
+
+            if (ext != "") {
+                print "." ext ":: " file >"/dev/stderr";
+            }
+            if (file in MEDIA) {
+                print "Duplicated file: " file >"/dev/stderr";
+            } else {
+                MEDIA[file] = "*" ext;
+                j++;
+                if ($1 in MD5) {
+                    MD5[$1] = MD5[$1] " " file;
+                } else {
+                    MD5[$1] = file;
+                    i++;
+                }
             }
         }
         close(cmd);
@@ -826,6 +901,7 @@ function save_media(file) {
     n = asort(MD5);
     ALL[""] = "";
     ALL["*"] = "";
+    SKIPPED["xxx"] = "";
 
     for (i=1; i<=n; i++) {
         print MD5[i] >>file;
@@ -838,7 +914,7 @@ function save_media(file) {
             if (MM[j] in MEDIA) {
                 split(MEDIA[MM[j]], SS, "\n");
                 if (!(SS[1] in FOUND)) {
-                    if (SS[1] in ALL) {
+                    if ((!(SS[1] in SKIPPED)) && (SS[1] in ALL)) {
                         print "Duplicated \"" SS[1] "\", " ALL[SS[1]] "/" MM[j] >"/dev/stderr";
                     } else {
                         ALL[SS[1]] = MM[j];
@@ -853,7 +929,7 @@ function save_media(file) {
             if (MM[j] in MEDIA) {
                 ss = split(MEDIA[MM[j]], SS, "\n");
                 for (k = 2; k <= ss; k++) {
-                    if (SS[k] in ALL) {
+                    if ((!(SS[k] in SKIPPED)) && (SS[k] in ALL)) {
                         print "Duplicated \"" SS[k] "\", " ALL[SS[1]] "/" MM[j] >"/dev/stderr";
                     } else {
                         ALL[SS[k]] = MM[j];
